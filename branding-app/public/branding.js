@@ -1,8 +1,8 @@
-/* public/branding.js — Vercel-friendly, no server required */
+/* public/branding.js — universal hook for most themes */
 (() => {
   const CONFIG = {
     // ✅ Your real Shopify variant IDs
-    setupFeeVariantId: 8651112710282, // Branding Setup Fee variant ID
+    setupFeeVariantId: 8651112710282,
     perUnitVariants: {
       "1 colour screen print, 1 position": 8651115561098,
       "Embroidery, 1 position up to 8000 stitches": 8651116052618,
@@ -67,6 +67,7 @@
 
     const toggleUpload = () => {
       fileWrap.style.display = select.value === CONFIG.labels.unbranded ? "none" : "block";
+      window.__brandingSelected = select.value; // expose for global hook
     };
     select.addEventListener("change", toggleUpload);
     toggleUpload();
@@ -86,11 +87,13 @@
     return res.json();
   }
 
+  // Our own add calls carry a header so the global fetch hook ignores them
   async function addToCart(payload) {
+    const headers = { Accept: "application/json", "X-Branding-App": "1" };
     const res = await fetch("/cart/add.js", {
       method: "POST",
       credentials: "same-origin",
-      headers: { Accept: "application/json" },
+      headers,
       body: payload instanceof FormData ? payload : JSON.stringify(payload),
     });
     if (!res.ok) throw new Error("Add to cart failed");
@@ -127,9 +130,9 @@
     );
   }
 
+  // ---- Robust path A: we handle the whole branded add ourselves (submit/click) ----
   async function handleBrandedAdd(form, ui) {
-    // 1) Add main product with properties (includes artwork file)
-    const fd = new FormData(form);
+    const fd = new FormData(form); // includes file & properties
     let mainItem;
     try {
       mainItem = await addToCart(fd);
@@ -139,35 +142,32 @@
       return;
     }
 
-    // 2) One-time setup fee
     try {
       await addSetupFeeOnce();
     } catch (e2) {
       console.warn("Setup fee add failed/skipped", e2);
     }
 
-    // 3) Per-unit charge (qty matches main product)
     const qtyInput = getQuantityInput(form);
     const qty = qtyInput ? Number(qtyInput.value || 1) : 1;
     const perUnitVariantId = CONFIG.perUnitVariants[ui.select.value];
-    if (!perUnitVariantId) {
-      console.warn("No per-unit variant ID mapped for:", ui.select.value);
-    } else {
+    if (perUnitVariantId) {
       try {
         await addPerUnitCharge(perUnitVariantId, qty, mainItem?.key);
       } catch (e3) {
         console.warn("Per-unit add failed", e3);
       }
+    } else {
+      console.warn("No per-unit variant mapped for:", ui.select.value);
     }
 
-    // 4) Go to cart if the theme doesn't open a drawer
     if (!document.body.matches(".ajax-cart-enabled")) {
       window.location.href = "/cart";
     }
   }
 
-  function interceptBoth(form, ui) {
-    // A) submit hook (some themes use this)
+  function interceptFormAndButton(form, ui) {
+    // Submit path
     form.addEventListener(
       "submit",
       (e) => {
@@ -179,7 +179,7 @@
       { capture: true }
     );
 
-    // B) click hook (covers themes that bypass native submit)
+    // Click path (themes that bypass submit)
     const addBtn =
       form.querySelector('button[name="add"]') ||
       form.querySelector('button[type="submit"]') ||
@@ -199,11 +199,72 @@
     }
   }
 
+  // ---- Robust path B: global fetch hook (catches theme AJAX adds we didn't intercept) ----
+  function installGlobalFetchHook() {
+    if (window.__brandingFetchHooked) return;
+    window.__brandingFetchHooked = true;
+
+    const origFetch = window.fetch;
+    window.fetch = async function (...args) {
+      const req = args[0];
+      const url = typeof req === "string" ? req : req.url || "";
+      const init = args[1] || {};
+
+      // Run the request first
+      const res = await origFetch(...args);
+
+      try {
+        // Ignore our own fee adds
+        const isOurCall =
+          (init && init.headers && (init.headers["X-Branding-App"] || init.headers.get?.("X-Branding-App"))) ||
+          (typeof req !== "string" && req.headers && (req.headers["X-Branding-App"] || req.headers.get?.("X-Branding-App")));
+
+        const brandedChosen =
+          window.__brandingSelected && window.__brandingSelected !== CONFIG.labels.unbranded;
+
+        // Only react to successful native add-to-cart calls
+        if (
+          !isOurCall &&
+          /\/cart\/add\.js(\?|$)/.test(url) &&
+          res.ok &&
+          brandedChosen
+        ) {
+          // Extract quantity if possible
+          let qty = 1;
+          const body = init?.body;
+          if (body instanceof FormData) {
+            qty = Number(body.get("quantity") || 1);
+          } else if (typeof body === "string") {
+            try {
+              const parsed = JSON.parse(body);
+              qty = Number(parsed.quantity || 1);
+            } catch {}
+          }
+
+          const perUnitVariantId = CONFIG.perUnitVariants[window.__brandingSelected];
+          try {
+            await addSetupFeeOnce();
+            if (perUnitVariantId) {
+              await addPerUnitCharge(perUnitVariantId, qty);
+            }
+          } catch (e) {
+            console.warn("Branding fee add via global hook failed", e);
+          }
+        }
+      } catch (e) {
+        console.warn("Branding global hook error", e);
+      }
+
+      return res;
+    };
+  }
+
   function boot() {
     const form = findProductForm();
     if (!form) return;
     const ui = insertUI(form);
-    interceptBoth(form, ui);
+    interceptFormAndButton(form, ui);
+    installGlobalFetchHook();
   }
 
   if (document.readyState === "loading") {
