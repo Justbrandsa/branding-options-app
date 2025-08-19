@@ -1,0 +1,30 @@
+{
+  "products": {
+    "7000000000000": {
+      "setupFee": 25,
+      "options": [
+        {
+          "value": "unbranded",
+          "label": "Unbranded",
+          "price": 0
+        },
+        {
+          "value": "screenprint",
+          "label": "1 colour screen print, 1 position",
+          "price": 10
+        },
+        {
+          "value": "embroidery",
+          "label": "Embroidery, 1 position up to 8000 stitches",
+          "price": 25
+        },
+        {
+          "value": "fullcolour",
+          "label": "Full colour print, 1 position (DFT)",
+          "price": 25
+        }
+      ],
+      "feeProductVariantId": "1234567890123"
+    }
+  }
+}
