@@ -2,11 +2,11 @@
 (() => {
   const CONFIG = {
     // ✅ Your real Shopify variant IDs
-    setupFeeVariantId: 8651112710282,
+    setupFeeVariantId: 10009319473445,
     perUnitVariants: {
-      "1 colour screen print, 1 position": 8651115561098,
-      "Embroidery, 1 position up to 8000 stitches": 8651116052618,
-      "Full colour print (DTF), 1 position": 8651116314762,
+      "1 colour screen print, 1 position": 10009331958053,
+      "Embroidery, 1 position up to 8000 stitches": 10009343852837,
+      "Full colour print (DTF), 1 position": 10009355485477,
     },
     labels: {
       selectLabel: "Choose Branding Options",
