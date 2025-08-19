@@ -1,258 +1,176 @@
-/*
- * branding.js
- *
- * This script injects a branding options selector into Shopify product pages. When
- * a shopper selects a branded option, the price is adjusted accordingly and a
- * file upload field appears to allow artwork to be provided. The script also
- * ensures that a one‑time setup fee is added to the cart without duplication.
- *
- * NOTE: This script relies on a backend service (the accompanying Express
- * server) to provide product configuration and to handle file uploads. It
- * communicates with the backend relative to its own hosting location.
- */
+/* public/branding.js — Vercel-friendly, no server required */
+(() => {
+  const CONFIG = {
+    // 🔁 REPLACE these with your real Shopify variant IDs
+    setupFeeVariantId: 8651112710282, // Branding Setup Fee variant ID
+    perUnitVariants: {
+      "1 colour screen print, 1 position": 8651115561098,
+      "Embroidery, 1 position up to 8000 stitches": 8651116052618,
+      "Full colour print (DTF), 1 position": 8651116314762,
+    },
+    labels: {
+      selectLabel: "Choose Branding Options",
+      unbranded: "Unbranded",
+      fileLabel: "Upload artwork",
+    },
+  };
 
-(function() {
-  // Determine the origin of this script so API calls are sent to the correct server
-  const scriptOrigin = new URL(document.currentScript.src).origin;
+  const $ = (sel, root = document) => root.querySelector(sel);
 
-  /**
-   * Attempt to extract the current product's JSON data. Many Shopify themes
-   * include a script element with type="application/json" that contains
-   * product information. Fallbacks are included for older themes.
-   */
-  function getProductData() {
-    // Look for a script tag with data-product attribute (used by Dawn theme)
-    const productScript = document.querySelector('script[data-product]');
-    if (productScript) {
-      try {
-        return JSON.parse(productScript.textContent.trim());
-      } catch (err) {
-        console.warn('Failed to parse product JSON from data-product:', err);
-      }
-    }
-    // Look for a product JSON contained in a script tag
-    const jsonScripts = document.querySelectorAll('script[type="application/json"]');
-    for (const s of jsonScripts) {
-      try {
-        const json = JSON.parse(s.textContent.trim());
-        if (json && json.id && json.variants) {
-          return json;
-        }
-      } catch (err) {
-        // continue searching
-      }
-    }
-    // Fallback to global variables (may not exist)
-    if (window.meta && window.meta.product) {
-      return window.meta.product;
-    }
-    if (window.product) {
-      return window.product;
-    }
-    return null;
+  function findProductForm() {
+    return (
+      document.querySelector('form[action^="/cart/add"]') ||
+      document.querySelector("#product-form") ||
+      document.querySelector('[data-product-form]') ||
+      document.querySelector("form.product-form")
+    );
   }
 
-  /**
-   * Convert a number to a currency string. This implementation assumes ZAR
-   * formatting (R for South African Rand). In a real app you would pull the
-   * store's currency formatting settings.
-   */
-  function currencyFormat(amount) {
-    return 'R' + amount.toFixed(2);
+  function insertUI(form) {
+    const fieldset = document.createElement("fieldset");
+    fieldset.style.margin = "12px 0";
+
+    const label = document.createElement("label");
+    label.textContent = CONFIG.labels.selectLabel;
+    label.style.display = "block";
+    label.style.marginBottom = "6px";
+
+    const select = document.createElement("select");
+    select.name = "properties[Branding Option]";
+    select.style.minWidth = "260px";
+
+    const opt0 = document.createElement("option");
+    opt0.value = CONFIG.labels.unbranded;
+    opt0.textContent = CONFIG.labels.unbranded;
+    select.appendChild(opt0);
+
+    Object.keys(CONFIG.perUnitVariants).forEach((k) => {
+      const o = document.createElement("option");
+      o.value = k;
+      o.textContent = k;
+      select.appendChild(o);
+    });
+
+    const fileWrap = document.createElement("div");
+    fileWrap.style.marginTop = "8px";
+    const fileLabel = document.createElement("label");
+    fileLabel.textContent = CONFIG.labels.fileLabel;
+    fileLabel.style.display = "block";
+    fileLabel.style.marginBottom = "4px";
+    const file = document.createElement("input");
+    file.type = "file";
+    file.name = "properties[Artwork]"; // Shopify saves this with the line item
+    file.accept = ".pdf,.ai,.eps,.svg,.png,.jpg,.jpeg";
+    fileWrap.appendChild(fileLabel);
+    fileWrap.appendChild(file);
+
+    const toggleUpload = () => {
+      fileWrap.style.display = select.value === CONFIG.labels.unbranded ? "none" : "block";
+    };
+    select.addEventListener("change", toggleUpload);
+    toggleUpload();
+
+    fieldset.appendChild(label);
+    fieldset.appendChild(select);
+    fieldset.appendChild(fileWrap);
+    form.insertBefore(fieldset, form.firstChild);
+
+    return { select };
   }
 
-  /**
-   * Update the displayed product price based on the selected branding option
-   * and quantity. This function finds a price element in the DOM and replaces
-   * its text content. If your theme uses different selectors you may need to
-   * adjust the query here.
-   */
-  function updateDisplayedPrice(basePrice, addPrice, quantity) {
-    const priceEl = document.querySelector('[data-product-price], .product__price, .price__regular, .price-item');
-    if (priceEl) {
-      const newPrice = basePrice + addPrice * quantity;
-      priceEl.textContent = currencyFormat(newPrice);
-    }
+  async function getCart() {
+    const res = await fetch("/cart.js", { credentials: "same-origin" });
+    return res.json();
   }
 
-  /**
-   * Main entry point. Fetch configuration and build the UI when product data
-   * is available.
-   */
-  function init() {
-    const product = getProductData();
-    if (!product || !product.id) {
-      return; // not a product page
-    }
-    const productId = product.id.toString();
-    fetch(`${scriptOrigin}/api/options?productId=${encodeURIComponent(productId)}`)
-      .then(res => res.json())
-      .then(data => {
-        if (!data.success || !data.options) {
-          return; // no branding options for this product
-        }
-        const config = data.options;
-        const options = config.options || [];
-        // Insert our custom UI into the product form
-        const form = document.querySelector('form[action^="/cart"]');
-        if (!form) return;
+  async function addToCart(payload) {
+    const res = await fetch("/cart/add.js", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+      body: payload instanceof FormData ? payload : JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error("Add to cart failed");
+    return res.json();
+  }
 
-        // Determine the base price from product JSON (price is in cents)
-        const basePrice = (product.price || product.variants[0].price) / 100;
-        // Create a wrapper element for our branding controls
-        const wrapper = document.createElement('div');
-        wrapper.className = 'branding-options';
-        wrapper.style.margin = '1rem 0';
-
-        // Label
-        const label = document.createElement('label');
-        label.textContent = 'Branding Options';
-        label.style.display = 'block';
-        label.style.marginBottom = '0.25rem';
-        wrapper.appendChild(label);
-
-        // Select element for branding options
-        const select = document.createElement('select');
-        select.name = 'properties[_branding_option]';
-        select.style.padding = '0.5rem';
-        select.style.width = '100%';
-        options.forEach(opt => {
-          const optEl = document.createElement('option');
-          optEl.value = opt.value;
-          optEl.dataset.price = opt.price;
-          optEl.textContent = opt.label + (opt.price > 0 ? ` ( +${currencyFormat(opt.price)} )` : '');
-          select.appendChild(optEl);
-        });
-        wrapper.appendChild(select);
-
-        // File input for artwork upload; hidden by default
-        const fileInput = document.createElement('input');
-        fileInput.type = 'file';
-        fileInput.name = 'branding_file';
-        fileInput.style.display = 'none';
-        fileInput.accept = '.jpg,.jpeg,.png,.pdf,.eps,.ai,.svg';
-        fileInput.style.marginTop = '0.5rem';
-        wrapper.appendChild(fileInput);
-
-        // Quantity selector; reuse existing quantity input if present
-        let quantityInput = form.querySelector('input[name="quantity"]');
-        if (!quantityInput) {
-          quantityInput = document.createElement('input');
-          quantityInput.type = 'number';
-          quantityInput.name = 'quantity';
-          quantityInput.min = '1';
-          quantityInput.value = '1';
-          quantityInput.style.marginTop = '0.5rem';
-          quantityInput.style.padding = '0.5rem';
-          quantityInput.style.width = '100%';
-          wrapper.appendChild(quantityInput);
-        }
-
-        // Insert the wrapper into the form, just before the add to cart button
-        const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]');
-        form.insertBefore(wrapper, submitBtn);
-
-        // Keep track of whether the setup fee variant is already present in the cart
-        let feeAdded = false;
-
-        // Event listeners to handle changes
-        function handleOptionChange() {
-          const selected = select.options[select.selectedIndex];
-          const extra = parseFloat(selected.dataset.price);
-          const qty = parseInt(quantityInput.value, 10) || 1;
-          // Show or hide file input based on whether branding is selected
-          fileInput.style.display = extra > 0 ? 'block' : 'none';
-          updateDisplayedPrice(basePrice, extra, qty);
-        }
-        function handleQuantityChange() {
-          const selected = select.options[select.selectedIndex];
-          const extra = parseFloat(selected.dataset.price);
-          const qty = parseInt(quantityInput.value, 10) || 1;
-          updateDisplayedPrice(basePrice, extra, qty);
-        }
-        select.addEventListener('change', handleOptionChange);
-        quantityInput.addEventListener('change', handleQuantityChange);
-
-        // Initialize price display
-        handleOptionChange();
-
-        // Override the form submission to add our logic
-        form.addEventListener('submit', function(event) {
-          event.preventDefault();
-          // Extract selected option information
-          const selected = select.options[select.selectedIndex];
-          const optionValue = selected.value;
-          const optionLabel = selected.textContent;
-          const optionPrice = parseFloat(selected.dataset.price);
-          const qty = parseInt(quantityInput.value, 10) || 1;
-          // Prepare line item properties
-          const properties = {};
-          properties['_branding_option'] = optionLabel;
-          // Determine if a file needs to be uploaded
-          let uploadPromise = Promise.resolve(null);
-          if (optionPrice > 0 && fileInput.files.length > 0) {
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            uploadPromise = fetch(`${scriptOrigin}/api/upload`, {
-              method: 'POST',
-              body: formData
-            }).then(resp => resp.json());
-          }
-          uploadPromise.then(uploadResult => {
-            if (uploadResult && uploadResult.url) {
-              properties['_branding_file'] = uploadResult.url;
-            }
-            // Build items array for cart
-            const items = [];
-            // Determine variant ID for the selected product; we choose the first variant if none is selected
-            const variantId = (product.selected_or_first_available_variant || product.variants[0]).id;
-            items.push({ id: variantId, quantity: qty, properties });
-            // If branding is selected, add the setup fee product as a separate line item
-            if (optionPrice > 0) {
-              // Check the cart to avoid duplicate setup fee
-              fetch('/cart.js')
-                .then(resp => resp.json())
-                .then(cart => {
-                  const exists = cart.items.some(item => item.id.toString() === config.feeProductVariantId);
-                  if (!exists) {
-                    items.push({ id: parseInt(config.feeProductVariantId, 10), quantity: 1, properties: { _note: 'Branding Setup Fee' } });
-                  }
-                  addItemsToCart(items);
-                })
-                .catch(() => addItemsToCart(items));
-            } else {
-              addItemsToCart(items);
-            }
-          });
-        });
-
-        /**
-         * Sends the items to Shopify's cart AJAX API and then redirects the
-         * shopper to the cart page. Without using the store's form action the
-         * additional fee line item would not be added.
-         */
-        function addItemsToCart(items) {
-          fetch('/cart/add.js', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items })
-          })
-            .then(resp => resp.json())
-            .then(() => {
-              // Redirect to cart page after successful addition
-              window.location.href = '/cart';
-            })
-            .catch(err => {
-              console.error('Failed to add items to cart', err);
-            });
-        }
+  async function addSetupFeeOnce() {
+    if (!CONFIG.setupFeeVariantId) return;
+    const cart = await getCart();
+    const exists = cart.items.some((i) => i.variant_id === Number(CONFIG.setupFeeVariantId));
+    if (!exists) {
+      await addToCart({
+        id: Number(CONFIG.setupFeeVariantId),
+        quantity: 1,
+        properties: { _branding_setup_fee: "true" },
       });
+    }
   }
 
-  // Wait for the DOM to be fully loaded before running
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+  async function addPerUnitCharge(variantId, quantity, mainLineKey) {
+    if (!variantId || !quantity) return;
+    await addToCart({
+      id: Number(variantId),
+      quantity,
+      properties: { _branding_charge_for: mainLineKey || "main-product" },
+    });
+  }
+
+  function getQuantityInput(form) {
+    return (
+      form.querySelector('input[name="quantity"]') ||
+      form.querySelector('input[type="number"][min="1"]') ||
+      form.querySelector("#Quantity")
+    );
+  }
+
+  function interceptSubmit(form, ui) {
+    form.addEventListener("submit", async (e) => {
+      const branded = ui.select.value !== CONFIG.labels.unbranded;
+      if (!branded) return; // normal flow
+
+      e.preventDefault();
+
+      // 1) Add main product with properties (includes the artwork file)
+      const fd = new FormData(form);
+      let mainItem;
+      try {
+        mainItem = await addToCart(fd);
+      } catch {
+        form.submit(); // fallback to theme behavior
+        return;
+      }
+
+      // 2) One-time setup fee
+      try {
+        await addSetupFeeOnce();
+      } catch {}
+
+      // 3) Per-unit charge, same qty as main product
+      const qtyInput = getQuantityInput(form);
+      const qty = qtyInput ? Number(qtyInput.value || 1) : 1;
+      const perUnitVariantId = CONFIG.perUnitVariants[ui.select.value];
+      try {
+        await addPerUnitCharge(perUnitVariantId, qty, mainItem?.key);
+      } catch {}
+
+      // 4) Go to cart if your theme doesn’t open a drawer
+      if (!document.body.matches(".ajax-cart-enabled")) {
+        window.location.href = "/cart";
+      }
+    });
+  }
+
+  function boot() {
+    const form = findProductForm();
+    if (!form) return;
+    const ui = insertUI(form);
+    interceptSubmit(form, ui);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
   } else {
-    init();
+    boot();
   }
 })();
