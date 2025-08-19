@@ -1,7 +1,7 @@
 /* public/branding.js — Vercel-friendly, no server required */
 (() => {
   const CONFIG = {
-    // 🔁 REPLACE these with your real Shopify variant IDs
+    // ✅ Your real Shopify variant IDs
     setupFeeVariantId: 8651112710282, // Branding Setup Fee variant ID
     perUnitVariants: {
       "1 colour screen print, 1 position": 8651115561098,
@@ -27,6 +27,7 @@
   }
 
   function insertUI(form) {
+    if (form.__brandingInjected) return form.__brandingUI; // avoid duplicates
     const fieldset = document.createElement("fieldset");
     fieldset.style.margin = "12px 0";
 
@@ -59,7 +60,7 @@
     fileLabel.style.marginBottom = "4px";
     const file = document.createElement("input");
     file.type = "file";
-    file.name = "properties[Artwork]"; // Shopify saves this with the line item
+    file.name = "properties[Artwork]"; // Shopify stores with line item
     file.accept = ".pdf,.ai,.eps,.svg,.png,.jpg,.jpeg";
     fileWrap.appendChild(fileLabel);
     fileWrap.appendChild(file);
@@ -75,7 +76,9 @@
     fieldset.appendChild(fileWrap);
     form.insertBefore(fieldset, form.firstChild);
 
-    return { select };
+    form.__brandingInjected = true;
+    form.__brandingUI = { select };
+    return form.__brandingUI;
   }
 
   async function getCart() {
@@ -124,48 +127,83 @@
     );
   }
 
-  function interceptSubmit(form, ui) {
-    form.addEventListener("submit", async (e) => {
-      const branded = ui.select.value !== CONFIG.labels.unbranded;
-      if (!branded) return; // normal flow
+  async function handleBrandedAdd(form, ui) {
+    // 1) Add main product with properties (includes artwork file)
+    const fd = new FormData(form);
+    let mainItem;
+    try {
+      mainItem = await addToCart(fd);
+    } catch (e) {
+      console.warn("Main add failed, falling back to native submit", e);
+      form.submit();
+      return;
+    }
 
-      e.preventDefault();
+    // 2) One-time setup fee
+    try {
+      await addSetupFeeOnce();
+    } catch (e2) {
+      console.warn("Setup fee add failed/skipped", e2);
+    }
 
-      // 1) Add main product with properties (includes the artwork file)
-      const fd = new FormData(form);
-      let mainItem;
-      try {
-        mainItem = await addToCart(fd);
-      } catch {
-        form.submit(); // fallback to theme behavior
-        return;
-      }
-
-      // 2) One-time setup fee
-      try {
-        await addSetupFeeOnce();
-      } catch {}
-
-      // 3) Per-unit charge, same qty as main product
-      const qtyInput = getQuantityInput(form);
-      const qty = qtyInput ? Number(qtyInput.value || 1) : 1;
-      const perUnitVariantId = CONFIG.perUnitVariants[ui.select.value];
+    // 3) Per-unit charge (qty matches main product)
+    const qtyInput = getQuantityInput(form);
+    const qty = qtyInput ? Number(qtyInput.value || 1) : 1;
+    const perUnitVariantId = CONFIG.perUnitVariants[ui.select.value];
+    if (!perUnitVariantId) {
+      console.warn("No per-unit variant ID mapped for:", ui.select.value);
+    } else {
       try {
         await addPerUnitCharge(perUnitVariantId, qty, mainItem?.key);
-      } catch {}
-
-      // 4) Go to cart if your theme doesn’t open a drawer
-      if (!document.body.matches(".ajax-cart-enabled")) {
-        window.location.href = "/cart";
+      } catch (e3) {
+        console.warn("Per-unit add failed", e3);
       }
-    });
+    }
+
+    // 4) Go to cart if the theme doesn't open a drawer
+    if (!document.body.matches(".ajax-cart-enabled")) {
+      window.location.href = "/cart";
+    }
+  }
+
+  function interceptBoth(form, ui) {
+    // A) submit hook (some themes use this)
+    form.addEventListener(
+      "submit",
+      (e) => {
+        const branded = ui.select.value !== CONFIG.labels.unbranded;
+        if (!branded) return;
+        e.preventDefault();
+        handleBrandedAdd(form, ui);
+      },
+      { capture: true }
+    );
+
+    // B) click hook (covers themes that bypass native submit)
+    const addBtn =
+      form.querySelector('button[name="add"]') ||
+      form.querySelector('button[type="submit"]') ||
+      form.querySelector('[data-add-to-cart]');
+    if (addBtn) {
+      addBtn.addEventListener(
+        "click",
+        (e) => {
+          const branded = ui.select.value !== CONFIG.labels.unbranded;
+          if (!branded) return;
+          e.preventDefault();
+          e.stopImmediatePropagation?.();
+          handleBrandedAdd(form, ui);
+        },
+        true
+      );
+    }
   }
 
   function boot() {
     const form = findProductForm();
     if (!form) return;
     const ui = insertUI(form);
-    interceptSubmit(form, ui);
+    interceptBoth(form, ui);
   }
 
   if (document.readyState === "loading") {
