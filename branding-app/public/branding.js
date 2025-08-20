@@ -1,99 +1,40 @@
-/* public/branding.js — debug version with per-category setup fee */
+/* public/branding.js — universal hook for most themes */
 (() => {
   const CONFIG = {
-    // ✅ Setup fee SKUs mapped by branding_category
-    setupFeeVariants: {
-      "apparel": 10009319473445,   // T-shirts, hoodies
-      "drinkware": 10009319473446, // mugs, bottles
-      "headwear": 10009319473447   // caps, beanies
-    },
-    // ✅ Per-unit branding fee SKUs mapped as "category:option"
+    // ✅ Your real Shopify variant IDs
+    setupFeeVariantId: 10009319473445,
     perUnitVariants: {
-      "apparel:Embroidery, 1 position up to 8000 stitches": 10009343852837,
-      "apparel:Screen print, 1 colour": 10009331958053,
-      "drinkware:Full colour print (DTF)": 10009355485477,
+      "1 colour screen print, 1 position": 10009331958053,
+      "Embroidery, 1 position up to 8000 stitches": 10009343852837,
+      "Full colour print (DTF), 1 position": 10009355485477,
     },
     labels: {
       selectLabel: "Choose Branding Options",
       unbranded: "Unbranded",
       fileLabel: "Upload artwork",
     },
-    // ✅ Product type injected via Liquid on PDP
-    productType: window.__JB_PRODUCT_TYPE || "unclassified",
   };
 
-  console.log("🔧 Branding app loaded, CONFIG:", CONFIG);
-
-  // --- Utilities ---
   const $ = (sel, root = document) => root.querySelector(sel);
 
-  async function getCart() {
-    const res = await fetch("/cart.js", { credentials: "same-origin" });
-    return await res.json();
-  }
-
-  async function addToCart(payload) {
-    const res = await fetch("/cart/add.js", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Branding-App": "1" },
-      credentials: "same-origin",
-      body: JSON.stringify(payload),
-    });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.description || result.message);
-    return result;
-  }
-
-  // --- Setup Fee per category ---
-  async function addSetupFeeForCategory(category) {
-    const feeVariantId = CONFIG.setupFeeVariants[category];
-    if (!feeVariantId) {
-      console.log("🔧 No setup fee variant for category:", category);
-      return;
-    }
-    const cart = await getCart();
-    const exists = cart.items.some(
-      (i) =>
-        i.variant_id === Number(feeVariantId) &&
-        i.properties &&
-        i.properties._branding_setup_type === category
+  function findProductForm() {
+    return (
+      document.querySelector('form[action^="/cart/add"]') ||
+      document.querySelector("#product-form") ||
+      document.querySelector('[data-product-form]') ||
+      document.querySelector("form.product-form")
     );
-    if (!exists) {
-      console.log("🔧 Adding setup fee for:", category);
-      await addToCart({
-        id: feeVariantId,
-        quantity: 1,
-        properties: { _branding_setup_fee: "true", _branding_setup_type: category },
-      });
-    } else {
-      console.log("🔧 Setup fee already exists for:", category);
-    }
   }
 
-  async function addPerUnitCharge(key, quantity, mainLineKey) {
-    const variantId = CONFIG.perUnitVariants[key];
-    if (!variantId) return;
-    console.log("🔧 Adding per-unit fee:", key, "x", quantity);
-    await addToCart({
-      id: variantId,
-      quantity,
-      properties: { _branding_charge_for: mainLineKey || "main" },
-    });
-  }
-
-  // --- UI Injection ---
   function insertUI(form) {
-    if (form.__brandingInjected) return form.__brandingUI;
-
+    if (form.__brandingInjected) return form.__brandingUI; // avoid duplicates
     const fieldset = document.createElement("fieldset");
     fieldset.style.margin = "12px 0";
-    fieldset.style.border = "1px solid #ddd";
-    fieldset.style.padding = "10px";
 
     const label = document.createElement("label");
     label.textContent = CONFIG.labels.selectLabel;
     label.style.display = "block";
-    label.style.fontWeight = "bold";
+    label.style.marginBottom = "6px";
 
     const select = document.createElement("select");
     select.name = "properties[Branding Option]";
@@ -104,32 +45,29 @@
     opt0.textContent = CONFIG.labels.unbranded;
     select.appendChild(opt0);
 
-    // show only per-unit options that match this product type
     Object.keys(CONFIG.perUnitVariants).forEach((k) => {
-      if (k.startsWith(CONFIG.productType + ":")) {
-        const niceLabel = k.split(":")[1];
-        const o = document.createElement("option");
-        o.value = k;
-        o.textContent = niceLabel;
-        select.appendChild(o);
-      }
+      const o = document.createElement("option");
+      o.value = k;
+      o.textContent = k;
+      select.appendChild(o);
     });
 
     const fileWrap = document.createElement("div");
     fileWrap.style.marginTop = "8px";
     const fileLabel = document.createElement("label");
     fileLabel.textContent = CONFIG.labels.fileLabel;
+    fileLabel.style.display = "block";
+    fileLabel.style.marginBottom = "4px";
     const file = document.createElement("input");
     file.type = "file";
-    file.name = "properties[Artwork]";
+    file.name = "properties[Artwork]"; // Shopify stores with line item
     file.accept = ".pdf,.ai,.eps,.svg,.png,.jpg,.jpeg";
     fileWrap.appendChild(fileLabel);
     fileWrap.appendChild(file);
 
     const toggleUpload = () => {
-      fileWrap.style.display =
-        select.value === CONFIG.labels.unbranded ? "none" : "block";
-      window.__brandingSelected = select.value;
+      fileWrap.style.display = select.value === CONFIG.labels.unbranded ? "none" : "block";
+      window.__brandingSelected = select.value; // expose for global hook
     };
     select.addEventListener("change", toggleUpload);
     toggleUpload();
@@ -144,55 +82,189 @@
     return form.__brandingUI;
   }
 
-  // --- Add to Cart Handler ---
-  async function handleBrandedAdd(form, ui) {
-    const fd = new FormData(form);
-    const qty = Number(fd.get("quantity") || 1);
-    const brandingKey = ui.select.value;
+  async function getCart() {
+    const res = await fetch("/cart.js", { credentials: "same-origin" });
+    return res.json();
+  }
 
-    // Add main product
+  // Our own add calls carry a header so the global fetch hook ignores them
+  async function addToCart(payload) {
+    const headers = { Accept: "application/json", "X-Branding-App": "1" };
+    const res = await fetch("/cart/add.js", {
+      method: "POST",
+      credentials: "same-origin",
+      headers,
+      body: payload instanceof FormData ? payload : JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error("Add to cart failed");
+    return res.json();
+  }
+
+  async function addSetupFeeOnce() {
+    if (!CONFIG.setupFeeVariantId) return;
+    const cart = await getCart();
+    const exists = cart.items.some((i) => i.variant_id === Number(CONFIG.setupFeeVariantId));
+    if (!exists) {
+      await addToCart({
+        id: Number(CONFIG.setupFeeVariantId),
+        quantity: 1,
+        properties: { _branding_setup_fee: "true" },
+      });
+    }
+  }
+
+  async function addPerUnitCharge(variantId, quantity, mainLineKey) {
+    if (!variantId || !quantity) return;
+    await addToCart({
+      id: Number(variantId),
+      quantity,
+      properties: { _branding_charge_for: mainLineKey || "main-product" },
+    });
+  }
+
+  function getQuantityInput(form) {
+    return (
+      form.querySelector('input[name="quantity"]') ||
+      form.querySelector('input[type="number"][min="1"]') ||
+      form.querySelector("#Quantity")
+    );
+  }
+
+  // ---- Robust path A: we handle the whole branded add ourselves (submit/click) ----
+  async function handleBrandedAdd(form, ui) {
+    const fd = new FormData(form); // includes file & properties
     let mainItem;
     try {
       mainItem = await addToCart(fd);
-    } catch (err) {
-      console.error("🔧 Main add failed", err);
+    } catch (e) {
+      console.warn("Main add failed, falling back to native submit", e);
       form.submit();
       return;
     }
 
-    if (brandingKey !== CONFIG.labels.unbranded) {
-      try {
-        await addSetupFeeForCategory(CONFIG.productType);
-        await addPerUnitCharge(brandingKey, qty, mainItem.key);
-      } catch (e) {
-        console.error("🔧 Fee add failed", e);
-      }
+    try {
+      await addSetupFeeOnce();
+    } catch (e2) {
+      console.warn("Setup fee add failed/skipped", e2);
     }
 
-    window.location.href = "/cart";
+    const qtyInput = getQuantityInput(form);
+    const qty = qtyInput ? Number(qtyInput.value || 1) : 1;
+    const perUnitVariantId = CONFIG.perUnitVariants[ui.select.value];
+    if (perUnitVariantId) {
+      try {
+        await addPerUnitCharge(perUnitVariantId, qty, mainItem?.key);
+      } catch (e3) {
+        console.warn("Per-unit add failed", e3);
+      }
+    } else {
+      console.warn("No per-unit variant mapped for:", ui.select.value);
+    }
+
+    if (!document.body.matches(".ajax-cart-enabled")) {
+      window.location.href = "/cart";
+    }
   }
 
-  function intercept(form, ui) {
+  function interceptFormAndButton(form, ui) {
+    // Submit path
     form.addEventListener(
       "submit",
       (e) => {
-        if (ui.select.value === CONFIG.labels.unbranded) return;
+        const branded = ui.select.value !== CONFIG.labels.unbranded;
+        if (!branded) return;
         e.preventDefault();
         handleBrandedAdd(form, ui);
       },
-      true
+      { capture: true }
     );
+
+    // Click path (themes that bypass submit)
+    const addBtn =
+      form.querySelector('button[name="add"]') ||
+      form.querySelector('button[type="submit"]') ||
+      form.querySelector('[data-add-to-cart]');
+    if (addBtn) {
+      addBtn.addEventListener(
+        "click",
+        (e) => {
+          const branded = ui.select.value !== CONFIG.labels.unbranded;
+          if (!branded) return;
+          e.preventDefault();
+          e.stopImmediatePropagation?.();
+          handleBrandedAdd(form, ui);
+        },
+        true
+      );
+    }
   }
 
-  // --- Boot ---
-  function boot() {
-    const form =
-      document.querySelector('form[action^="/cart/add"]') ||
-      document.querySelector("form.product-form");
-    if (!form) return;
+  // ---- Robust path B: global fetch hook (catches theme AJAX adds we didn't intercept) ----
+  function installGlobalFetchHook() {
+    if (window.__brandingFetchHooked) return;
+    window.__brandingFetchHooked = true;
 
+    const origFetch = window.fetch;
+    window.fetch = async function (...args) {
+      const req = args[0];
+      const url = typeof req === "string" ? req : req.url || "";
+      const init = args[1] || {};
+
+      // Run the request first
+      const res = await origFetch(...args);
+
+      try {
+        // Ignore our own fee adds
+        const isOurCall =
+          (init && init.headers && (init.headers["X-Branding-App"] || init.headers.get?.("X-Branding-App"))) ||
+          (typeof req !== "string" && req.headers && (req.headers["X-Branding-App"] || req.headers.get?.("X-Branding-App")));
+
+        const brandedChosen =
+          window.__brandingSelected && window.__brandingSelected !== CONFIG.labels.unbranded;
+
+        // Only react to successful native add-to-cart calls
+        if (
+          !isOurCall &&
+          /\/cart\/add\.js(\?|$)/.test(url) &&
+          res.ok &&
+          brandedChosen
+        ) {
+          // Extract quantity if possible
+          let qty = 1;
+          const body = init?.body;
+          if (body instanceof FormData) {
+            qty = Number(body.get("quantity") || 1);
+          } else if (typeof body === "string") {
+            try {
+              const parsed = JSON.parse(body);
+              qty = Number(parsed.quantity || 1);
+            } catch {}
+          }
+
+          const perUnitVariantId = CONFIG.perUnitVariants[window.__brandingSelected];
+          try {
+            await addSetupFeeOnce();
+            if (perUnitVariantId) {
+              await addPerUnitCharge(perUnitVariantId, qty);
+            }
+          } catch (e) {
+            console.warn("Branding fee add via global hook failed", e);
+          }
+        }
+      } catch (e) {
+        console.warn("Branding global hook error", e);
+      }
+
+      return res;
+    };
+  }
+
+  function boot() {
+    const form = findProductForm();
+    if (!form) return;
     const ui = insertUI(form);
-    intercept(form, ui);
+    interceptFormAndButton(form, ui);
+    installGlobalFetchHook();
   }
 
   if (document.readyState === "loading") {
