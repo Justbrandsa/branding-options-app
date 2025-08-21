@@ -1,0 +1,28 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && prisma migrate deploy && next build",
+    "start": "next start",
+    "prisma": "prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.16.1",
+    "@shopify/shopify-api": "^11.0.0",
+    "graphql": "^16.8.1",
+    "jose": "^5.2.4",
+    "next": "14.2.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "prisma": "^5.16.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
